@@ -1,0 +1,31 @@
+{
+  "total_files": 1000,
+  "corrupted_files": 0,
+  "dimensions": {
+    "unique_resolutions": {
+      "320x200": 1000
+    },
+    "min_width": 320,
+    "max_width": 320,
+    "min_height": 200,
+    "max_height": 200,
+    "mean_aspect_ratio": 1.6
+  },
+  "formats": {
+    "JPEG": 1000
+  },
+  "color_modes": {
+    "RGB": 1000
+  },
+  "file_size_bytes": {
+    "min": 6384,
+    "max": 12318,
+    "mean": 8001.9
+  },
+  "blur_laplacian_var": {
+    "min": 2622.23,
+    "max": 7822.14,
+    "mean": 3965.79,
+    "median": 3286.22
+  }
+}

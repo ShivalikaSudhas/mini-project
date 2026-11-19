@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env/
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Checkpoints and large artifacts
+*.pth
+*.pt
+*.onnx
+*.weights
+models/**/*.pth
+
+# Datasets & ZIPs
+*.zip
+*.tar.gz
+data/raw/
+synthetic_id_dataset.zip
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Experiments & temp
+output/
+result/
