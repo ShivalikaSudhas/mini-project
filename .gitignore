@@ -21,6 +21,7 @@ models/**/*.pth
 *.zip
 *.tar.gz
 data/raw/
+synthetic_id_dataset/
 synthetic_id_dataset.zip
 
 # IDE & OS
