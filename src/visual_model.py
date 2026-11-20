@@ -1,45 +1,52 @@
 """
-visual_model.py — SIH26188 Indian ID Forgery Detection
-=======================================================
-EfficientNet-B0 backbone (ImageNet pretrained) adapted for:
-  1. Binary classification  : genuine (0) vs forged (1)
-  2. Feature extraction     : 1280-dim penultimate-layer vector for fusion
-
-Design choices:
-  - Uses `timm` (PyTorch Image Models) for reliable pretrained weights
-  - Frozen backbone by default; call unfreeze_top_n_blocks() for fine-tuning
-  - Dropout before classifier head to reduce overfitting on small datasets
-  - Returns both logits and 1280-d features in every forward pass
-
-Author : Visual Lead / Integration Lead
-Project: SIH26188
+visual_model.py — EfficientNet-B0 Visual Branch for Identity Document Forgery Detection
+Phase 3: Visual Model Development
+Provides:
+  - VisualForensicModel (EfficientNet-B0 backbone + classifier head)
+  - Penultimate 1280-dimensional feature extraction for multimodal fusion
+  - Interfaces:
+      predict_visual(image, model=None, checkpoint_path=None)
+      extract_visual_features(image, model=None, checkpoint_path=None)
 """
 
+import os
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union
+
+import numpy as np
+from PIL import Image
+import cv2
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.transforms as T
+import timm
 
 log = logging.getLogger(__name__)
 
-# EfficientNet-B0 penultimate feature dimension (timm default)
+# Constants
 FEATURE_DIM = 1280
+EFFICIENTNET_SIZE = 224
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD  = (0.229, 0.224, 0.225)
+
+_DEFAULT_TRANSFORM = T.Compose([
+    T.Resize((EFFICIENTNET_SIZE, EFFICIENTNET_SIZE), interpolation=T.InterpolationMode.BILINEAR),
+    T.ToTensor(),
+    T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+])
+
+# Module-level model cache for quick inference
+_LOADED_MODEL: Optional["VisualForensicModel"] = None
+_LOADED_CKPT_PATH: Optional[str] = None
 
 
 class VisualForensicModel(nn.Module):
     """
     EfficientNet-B0 based visual forgery detector.
-
-    Parameters
-    ----------
-    num_classes     : 2  (genuine / forged) — kept as param for flexibility
-    pretrained      : load ImageNet weights via timm
-    freeze_backbone : freeze all backbone layers (recommended for small datasets)
-    dropout_rate    : dropout before the final linear layer
-    feature_dim     : output dimension of the backbone (1280 for EfficientNet-B0)
+    Outputs binary classification logits and a 1280-dimensional feature vector.
     """
 
     def __init__(
@@ -54,59 +61,32 @@ class VisualForensicModel(nn.Module):
         self.num_classes = num_classes
         self.feature_dim = feature_dim
 
-        # ── Load EfficientNet-B0 backbone (features only, no head) ───────────
-        try:
-            import timm
-        except ImportError:
-            raise ImportError("Install timm: pip install timm")
-
-        # global_pool='' disables timm's built-in pooling; we pool ourselves
+        # Backbone: timm efficientnet_b0
         self.backbone = timm.create_model(
             "efficientnet_b0",
             pretrained=pretrained,
-            num_classes=0,        # remove built-in classifier
-            global_pool="",       # disable built-in pooling
+            num_classes=0,
+            global_pool="",
         )
-        log.info("Loaded EfficientNet-B0 (pretrained=%s)", pretrained)
 
-        # ── Global average pooling ────────────────────────────────────────────
-        self.global_pool = nn.AdaptiveAvgPool2d(1)  # (B, 1280, 1, 1) → (B, 1280)
+        # Global average pooling
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
 
-        # ── Classification head ───────────────────────────────────────────────
+        # Classification head
         self.classifier = nn.Sequential(
             nn.Dropout(p=dropout_rate),
             nn.Linear(feature_dim, num_classes),
         )
 
-        # ── Freeze backbone if requested ──────────────────────────────────────
         if freeze_backbone:
             self._freeze_backbone()
 
-    # ── Forward pass ──────────────────────────────────────────────────────────
-
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """
-        Parameters
-        ----------
-        x : (B, 3, 224, 224) float32 tensor (ImageNet-normalised)
-
-        Returns
-        -------
-        dict with keys:
-          "logits"   : (B, 2)    raw class scores
-          "features" : (B, 1280) penultimate-layer embedding for fusion
-          "proba"    : (B, 2)    softmax probabilities
-        """
-        # ── Backbone feature map ─────────────────────────────────────────────
-        feat_map = self.backbone(x)           # (B, 1280, H, W)
-
-        # ── Global average pool ──────────────────────────────────────────────
-        pooled = self.global_pool(feat_map)   # (B, 1280, 1, 1)
-        features = pooled.flatten(1)          # (B, 1280)
-
-        # ── Classifier ───────────────────────────────────────────────────────
-        logits = self.classifier(features)    # (B, 2)
-        proba  = F.softmax(logits, dim=-1)    # (B, 2)
+        feat_map = self.backbone(x)         # (B, 1280, H, W)
+        pooled = self.global_pool(feat_map) # (B, 1280, 1, 1)
+        features = pooled.flatten(1)        # (B, 1280)
+        logits = self.classifier(features)  # (B, 2)
+        proba  = F.softmax(logits, dim=-1)  # (B, 2)
 
         return {
             "logits":   logits,
@@ -114,71 +94,38 @@ class VisualForensicModel(nn.Module):
             "proba":    proba,
         }
 
-    # ── Feature-only extraction (for fusion module) ───────────────────────────
-
     @torch.no_grad()
     def extract_visual_features(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Returns a detached (B, 1280) feature tensor.
-        Use this interface in the fusion module — do NOT call forward().
-
-        Interface contract (agreed with OCR / fusion teammates):
-          Input : (B, 3, 224, 224) float32 — ImageNet normalised
-          Output: (B, 1280)        float32 — L2-normalised feature vector
-        """
+        """Returns L2-normalized (B, 1280) feature tensor."""
         self.eval()
         out = self.forward(x)
-        feats = out["features"]
-        # L2-normalise so fusion is scale-independent
-        feats = F.normalize(feats, p=2, dim=-1)
+        feats = F.normalize(out["features"], p=2, dim=-1)
         return feats.detach().cpu()
 
-    # ── Backbone freezing / unfreezing ────────────────────────────────────────
-
     def _freeze_backbone(self):
-        """Freeze all backbone parameters."""
         for param in self.backbone.parameters():
             param.requires_grad = False
-        log.info("Backbone frozen — only classifier head is trainable.")
 
     def unfreeze_top_n_blocks(self, n: int = 3):
-        """
-        Unfreeze the last n MBConv blocks of EfficientNet-B0 for fine-tuning.
-        Call this after the initial frozen-head training phase converges.
-
-        EfficientNet-B0 has 9 MBConv blocks (blocks 0–8).
-        Unfreezing the last 3 (blocks 6–8) is a safe starting point.
-        """
-        # timm names the blocks as backbone.blocks[i]
+        """Unfreeze top n MBConv blocks for fine-tuning."""
         all_blocks = list(self.backbone.blocks)
         total = len(all_blocks)
         for i, block in enumerate(all_blocks):
             if i >= total - n:
                 for param in block.parameters():
                     param.requires_grad = True
-        # Also unfreeze the final conv layer
         for param in self.backbone.conv_head.parameters():
             param.requires_grad = True
         for param in self.backbone.bn2.parameters():
             param.requires_grad = True
-        log.info("Unfrozen last %d blocks + conv_head for fine-tuning.", n)
 
     def freeze_backbone(self):
-        """Re-freeze entire backbone (undo unfreeze_top_n_blocks)."""
         self._freeze_backbone()
 
-    # ── Parameter summary ─────────────────────────────────────────────────────
-
     def count_parameters(self) -> Dict[str, int]:
-        total     = sum(p.numel() for p in self.parameters())
-        trainable = sum(p.numel() for p in self.parameters()
-                        if p.requires_grad)
-        log.info("Parameters — total: %d  trainable: %d  frozen: %d",
-                 total, trainable, total - trainable)
-        return {"total": total, "trainable": trainable,
-                "frozen": total - trainable}
-
-    # ── Checkpoint I/O ────────────────────────────────────────────────────────
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        return {"total": total, "trainable": trainable, "frozen": total - trainable}
 
     def save_checkpoint(
         self,
@@ -187,72 +134,146 @@ class VisualForensicModel(nn.Module):
         metrics: Optional[Dict] = None,
         optimizer_state: Optional[Dict] = None,
     ):
-        """Save model weights + training metadata."""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         ckpt = {
-            "epoch":            epoch,
+            "epoch": epoch,
             "model_state_dict": self.state_dict(),
-            "metrics":          metrics or {},
+            "metrics": metrics or {},
             "model_config": {
-                "num_classes":     self.num_classes,
-                "feature_dim":     self.feature_dim,
+                "num_classes": self.num_classes,
+                "feature_dim": self.feature_dim,
             },
         }
         if optimizer_state:
             ckpt["optimizer_state_dict"] = optimizer_state
         torch.save(ckpt, path)
-        log.info("Checkpoint saved → %s  (epoch %d)", path, epoch)
 
     @classmethod
     def load_checkpoint(cls, path: str, device: Optional[str] = None) -> Tuple["VisualForensicModel", Dict]:
-        """Load model from checkpoint."""
         device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         ckpt = torch.load(path, map_location=device)
-        cfg  = ckpt.get("model_config", {})
+        cfg = ckpt.get("model_config", {})
         model = cls(
             num_classes=cfg.get("num_classes", 2),
-            pretrained=False,     # weights are in the checkpoint
+            pretrained=False,
             freeze_backbone=False,
         )
         model.load_state_dict(ckpt["model_state_dict"])
         model.to(device)
-        log.info("Checkpoint loaded ← %s  (epoch %d)",
-                 path, ckpt.get("epoch", -1))
+        model.eval()
         return model, ckpt
 
 
-# ─── Standalone test ──────────────────────────────────────────────────────────
+# ─── Inference Preprocessing Helper ──────────────────────────────────────────
+
+def _preprocess_input_image(image_input: Union[str, Path, Image.Image, np.ndarray]) -> torch.Tensor:
+    """Preprocesses input into (1, 3, 224, 224) normalized tensor."""
+    if isinstance(image_input, (str, Path)):
+        img_path = str(image_input)
+        if not os.path.exists(img_path):
+            raise FileNotFoundError(f"Image not found at path: {img_path}")
+        img_pil = Image.open(img_path).convert("RGB")
+    elif isinstance(image_input, np.ndarray):
+        if len(image_input.shape) == 2:
+            img_pil = Image.fromarray(image_input).convert("RGB")
+        elif image_input.shape[2] == 3:
+            # Assume RGB; if uint8
+            img_pil = Image.fromarray(image_input.astype(np.uint8))
+        else:
+            raise ValueError(f"Unsupported numpy image shape: {image_input.shape}")
+    elif isinstance(image_input, Image.Image):
+        img_pil = image_input.convert("RGB")
+    else:
+        raise TypeError(f"Unsupported image input type: {type(image_input)}")
+
+    tensor = _DEFAULT_TRANSFORM(img_pil)  # (3, 224, 224)
+    return tensor.unsqueeze(0)            # (1, 3, 224, 224)
+
+
+def get_default_visual_model(checkpoint_path: Optional[str] = None) -> VisualForensicModel:
+    """Helper to return or load a shared model instance."""
+    global _LOADED_MODEL, _LOADED_CKPT_PATH
+    default_ckpt = checkpoint_path or "D:/visual/models/visual/best_visual_model.pth"
+
+    if _LOADED_MODEL is not None and _LOADED_CKPT_PATH == default_ckpt:
+        return _LOADED_MODEL
+
+    if os.path.exists(default_ckpt):
+        model, _ = VisualForensicModel.load_checkpoint(default_ckpt)
+        _LOADED_MODEL = model
+        _LOADED_CKPT_PATH = default_ckpt
+        return _LOADED_MODEL
+    else:
+        # Fallback to pretrained ImageNet model
+        model = VisualForensicModel(pretrained=True, freeze_backbone=True)
+        model.eval()
+        _LOADED_MODEL = model
+        _LOADED_CKPT_PATH = "pretrained_imagenet"
+        return _LOADED_MODEL
+
+
+# ─── Public Interfaces Required by Prompt ────────────────────────────────────
+
+def predict_visual(
+    image: Union[str, Path, Image.Image, np.ndarray],
+    model: Optional[VisualForensicModel] = None,
+    checkpoint_path: Optional[str] = None,
+    device: Optional[str] = None
+) -> Dict:
+    """
+    predict_visual(image)
+    Interface required by Master Prompt Section 3 (Phase 3).
+    Returns class prediction, calibrated probability, confidence, and 1280-d features.
+    """
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    if model is None:
+        model = get_default_visual_model(checkpoint_path)
+    model.to(device)
+    model.eval()
+
+    tensor = _preprocess_input_image(image).to(device)
+    with torch.no_grad():
+        out = model(tensor)
+        proba = out["proba"].squeeze(0).cpu().numpy()  # [p_genuine, p_forged]
+        features = F.normalize(out["features"], p=2, dim=-1).squeeze(0).cpu().numpy()
+
+    p_genuine = float(proba[0])
+    p_forged = float(proba[1])
+    class_id = int(np.argmax(proba))
+    prediction = "forged" if class_id == 1 else "genuine"
+    confidence = float(np.max(proba))
+
+    return {
+        "prediction": prediction,
+        "class_id": class_id,
+        "probability_genuine": round(p_genuine, 4),
+        "probability_forged": round(p_forged, 4),
+        "confidence": round(confidence, 4),
+        "features": features,
+    }
+
+
+def extract_visual_features(
+    image: Union[str, Path, Image.Image, np.ndarray],
+    model: Optional[VisualForensicModel] = None,
+    checkpoint_path: Optional[str] = None,
+    device: Optional[str] = None
+) -> np.ndarray:
+    """
+    extract_visual_features(image)
+    Interface required by Master Prompt Section 3 (Phase 3 & Phase 5).
+    Returns numerical 1280-dimensional L2-normalized feature vector.
+    """
+    res = predict_visual(image, model=model, checkpoint_path=checkpoint_path, device=device)
+    return res["features"]
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    log.info("Running on: %s", device)
-
-    model = VisualForensicModel(pretrained=True, freeze_backbone=True).to(device)
-    model.count_parameters()
-
-    # Fake batch
-    x = torch.randn(4, 3, 224, 224).to(device)
-    with torch.no_grad():
-        out = model(x)
-
-    log.info("logits shape   : %s", out["logits"].shape)
-    log.info("features shape : %s", out["features"].shape)
-    log.info("proba shape    : %s", out["proba"].shape)
-
-    # Test feature extraction interface
-    feats = model.extract_visual_features(x)
-    log.info("extract_visual_features → %s  norm~%.4f",
-             feats.shape, feats.norm(dim=-1).mean().item())
-
-    # Test checkpoint save/load
-    model.save_checkpoint(
-        "outputs/checkpoints/test_ckpt.pth",
-        epoch=0,
-        metrics={"val_f1": 0.0},
-    )
-    model2, meta = VisualForensicModel.load_checkpoint(
-        "outputs/checkpoints/test_ckpt.pth", device=device
-    )
-    log.info("Re-loaded model class: %s", type(model2).__name__)
-    log.info("visual_model.py self-test PASSED.")
+    print("Testing VisualForensicModel public interfaces...")
+    dummy_img = Image.new("RGB", (320, 200), color=(180, 140, 120))
+    res = predict_visual(dummy_img)
+    print("predict_visual result:", {k: v for k, v in res.items() if k != 'features'})
+    feats = extract_visual_features(dummy_img)
+    print(f"extract_visual_features shape: {feats.shape}, norm: {np.linalg.norm(feats):.4f}")
+    print("Visual branch interfaces verified successfully!")

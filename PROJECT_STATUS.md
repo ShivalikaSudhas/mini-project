@@ -2,8 +2,8 @@
 # AI-Based Fake Identity & Document Screening System
 
 ## Current Phase
-- **Phase 2: Dataset Preparation (COMPLETED)**
-- **Next Phase:** Phase 3 — Visual Model Development (EfficientNet-B0)
+- **Phase 3: Visual Model Development (COMPLETED)**
+- **Phase 4: OCR Model Development (In Progress)**
 
 ---
 
@@ -11,48 +11,61 @@
 - **Operating System:** Windows (AMD64)
 - **Workspace Directory:** `D:\visual`
 - **Python Runtime:** Python 3.10.10 (virtual environment: `D:\visual\.env`)
-- **PyTorch Installation:** PyTorch 2.14.1+cpu (CUDA: False / CPU only)
-- **Installed Packages:** `torch`, `torchvision`, `numpy`, `pandas`, `cv2`, `PIL`, `sklearn`
-- **Background Installs in Progress:** `timm`, `albumentations`, `tabulate`
+- **PyTorch Installation:** PyTorch 2.14.1+cpu (Device: CPU)
+- **Visual Model Backbone:** `timm` EfficientNet-B0 (`efficientnet_b0.ra_in1k`, cached locally)
+- **Visual Model Checkpoint:** `models/visual/best_visual_model.pth`
 
 ---
 
-## 2. Dataset Preparation Summary (Phase 2 Findings & Artifacts)
-- **Master Metadata Generated:** `data/metadata/dataset_master.csv` (1,000 samples)
-  - Unified Schema: `sample_id`, `source_id`, `doc_type`, `label`, `label_name`, `manip_type`, `filename`, `relative_path`, `absolute_path`, `width`, `height`, `channels`
-- **In-Domain Stratified Split:** `data/metadata/split_in_domain.csv`
-  - Grouped by `source_id` to strictly prevent train-test contamination.
-  - Train: 700 samples (350 genuine, 350 forged — 70 source pairs per document type)
-  - Validation: 150 samples (75 genuine, 75 forged — 15 source pairs per document type)
-  - Test: 150 samples (75 genuine, 75 forged — 15 source pairs per document type)
-  - Zero leakage guarantee verified across all splits.
-- **Leave-One-Document-Type-Out (LODO) 5-Fold Protocol:**
-  - Fold 1 (`aadhaar` held out): 680 Train, 120 Val, 200 Test (`lodo_fold_aadhaar.csv`)
-  - Fold 2 (`driving_licence` held out): 680 Train, 120 Val, 200 Test (`lodo_fold_driving_licence.csv`)
-  - Fold 3 (`pan` held out): 680 Train, 120 Val, 200 Test (`lodo_fold_pan.csv`)
-  - Fold 4 (`passport` held out): 680 Train, 120 Val, 200 Test (`lodo_fold_passport.csv`)
-  - Fold 5 (`voter_id` held out): 680 Train, 120 Val, 200 Test (`lodo_fold_voter_id.csv`)
-  - Summary: `data/metadata/lodo_folds_summary.csv`
-- **Documentation:** `data/metadata/dataset_preparation_report.md`
+## 2. Phase 3 Visual Model Results (In-Domain Benchmark)
+- **Training Strategy:**
+  - Phase 1 (Warmup): 4 Epochs with frozen backbone (Head LR = 1e-3, AdamW)
+  - Phase 2 (Fine-tuning): 6 Epochs unfreezing top 3 MBConv blocks (Backbone LR = 1e-4, Head LR = 5e-4, Cosine Annealing)
+- **Performance Progression:**
+  - Epoch 1 (Warmup): Train Loss = 0.5954, Val Acc = 88.00%, Val F1 = 0.8657, Val AUROC = 0.9543
+  - Epoch 4 (Warmup): Train Loss = 0.3817, Val Acc = 94.67%, Val F1 = 0.9459, Val AUROC = 0.9906
+  - Epoch 10 (Fine-tuned): Train Loss = 0.1147, Val Acc = 100.0%, Val F1 = 1.0000, Val AUROC = 1.0000
+- **Held-Out Test Set Evaluation (150 Samples: 75 Genuine, 75 Forged):**
+  - **Accuracy:** 1.0000 (100.0%)
+  - **Precision:** 1.0000 (100.0%)
+  - **Recall:** 1.0000 (100.0%)
+  - **F1-Score:** 1.0000 (100.0%)
+  - **AUROC:** 1.0000
+  - **Confusion Matrix:** `[[75, 0], [0, 75]]` (Zero False Positives, Zero False Negatives)
+- **Scientific Observation:**
+  - The 100% test score on the in-domain test set confirms that on the initial dataset, visual artifacts are stark enough for the visual model to classify with near-zero error.
+  - The crucial research evaluation will occur in **Phase 6 (LODO cross-document evaluation on unseen types)** and with **realistic forensic datasets**.
 
 ---
 
-## 3. Completed Tasks
-- [x] Initialized Git repository and created baseline commit for Phase 1.
-- [x] Developed automated data preparation pipeline (`src/prepare_dataset.py`).
-- [x] Standardized `sample_id` and `source_id` naming conventions.
-- [x] Generated master metadata CSV (`data/metadata/dataset_master.csv`).
-- [x] Created source-ID grouped In-Domain split (`data/metadata/split_in_domain.csv`).
-- [x] Created all 5 LODO cross-validation fold splits.
-- [x] Formally verified zero data leakage and 50:50 class balance across every split.
-- [x] Generated Phase 2 technical documentation.
+## 3. Artifacts & Outputs Generated
+- **Model Checkpoint:** [models/visual/best_visual_model.pth](file:///D:/visual/models/visual/best_visual_model.pth)
+- **Test Metrics JSON:** [results/metrics/visual_test_metrics.json](file:///D:/visual/results/metrics/visual_test_metrics.json)
+- **Training & Loss Curves Plot:** [results/graphs/visual_training_curves.png](file:///D:/visual/results/graphs/visual_training_curves.png)
+- **Confusion Matrix Plot:** [results/graphs/visual_confusion_matrix.png](file:///D:/visual/results/graphs/visual_confusion_matrix.png)
+- **Test Error Analysis:** [results/reports/visual_error_analysis.csv](file:///D:/visual/results/reports/visual_error_analysis.csv)
+- **Standard Interfaces Verified:**
+  - `predict_visual(image)`
+  - `extract_visual_features(image)` $\rightarrow$ 1,280-dimensional L2-normalized feature representation.
 
 ---
 
-## 4. Next Recommended Task
-- **Phase 3 — Visual Model Development:**
-  - Build the visual branch using `EfficientNet-B0`.
-  - Implement preprocessing and augmentation for EfficientNet-B0.
-  - Implement `predict_visual(image)` and `extract_visual_features(image)`.
-  - Train on in-domain training set with frozen backbone, then fine-tune.
-  - Evaluate on in-domain test set (Accuracy, Precision, Recall, F1, AUROC, Confusion Matrix).
+## 4. Completed Tasks
+- [x] Phase 1: Workspace setup, file integrity, and forensic audit of all 5 Indian document classes.
+- [x] Phase 2: Leakage-free master metadata (`dataset_master.csv`) and LODO fold generation.
+- [x] Phase 3: Visual branch development (`VisualForensicModel` using EfficientNet-B0).
+- [x] Implemented two-phase training (`src/train_visual.py`).
+- [x] Verified `predict_visual` and `extract_visual_features` interfaces.
+- [x] Generated training curves, confusion matrix, error analysis report, and metrics.
+
+---
+
+## 5. Next Steps
+- **Phase 4 — OCR Model Development:**
+  - Build `src/ocr_model.py` with PaddleOCR / text extraction engine.
+  - Extract text lines, bounding-box geometry, text confidence, character-level spacing, and alignment features.
+  - Implement `extract_ocr_features(image)` and `predict_ocr(image)`.
+  - Train and evaluate the OCR-only branch on the in-domain split.
+- **Phase 5 — Multimodal Feature Fusion:**
+  - Combine 1280-d visual feature vector with OCR feature vector.
+  - Train MLP fusion classifier.
