@@ -1,0 +1,16 @@
+Held_Out_Doc,Stream,Seen_Acc,Unseen_Acc,Gen_Gap_Acc,Unseen_Precision,Unseen_Recall,Unseen_F1,Unseen_AUROC
+driver_license,OCR-Only,1.0,1.0,0.0,1.0,1.0,1.0,1.0
+driver_license,Visual-Only,1.0,1.0,0.0,1.0,1.0,1.0,1.0
+driver_license,Multimodal (Visual+OCR),1.0,0.8333333333333334,0.16666666666666663,0.75,1.0,0.8571428571428571,1.0
+employee_badge,OCR-Only,1.0,0.8333333333333334,0.16666666666666663,0.75,1.0,0.8571428571428571,1.0
+employee_badge,Visual-Only,1.0,0.8333333333333334,0.16666666666666663,1.0,0.6666666666666666,0.8,1.0
+employee_badge,Multimodal (Visual+OCR),1.0,0.8333333333333334,0.16666666666666663,1.0,0.6666666666666666,0.8,1.0
+health_card,OCR-Only,1.0,0.6666666666666666,0.33333333333333337,0.6,1.0,0.75,1.0
+health_card,Visual-Only,1.0,1.0,0.0,1.0,1.0,1.0,1.0
+health_card,Multimodal (Visual+OCR),1.0,0.6666666666666666,0.33333333333333337,0.6,1.0,0.75,1.0
+national_id,OCR-Only,1.0,0.5,0.5,0.0,0.0,0.0,1.0
+national_id,Visual-Only,1.0,1.0,0.0,1.0,1.0,1.0,1.0
+national_id,Multimodal (Visual+OCR),1.0,1.0,0.0,1.0,1.0,1.0,1.0
+student_card,OCR-Only,1.0,0.8333333333333334,0.16666666666666663,1.0,0.6666666666666666,0.8,0.888888888888889
+student_card,Visual-Only,1.0,0.5,0.5,0.5,1.0,0.6666666666666666,1.0
+student_card,Multimodal (Visual+OCR),1.0,1.0,0.0,1.0,1.0,1.0,1.0

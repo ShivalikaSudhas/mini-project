@@ -1,0 +1,23 @@
+# Core Deep Learning & Computer Vision
+paddlepaddle==2.6.2
+paddleocr==2.8.1
+opencv-python==4.10.0.84
+pillow>=10.0.0
+
+# Numerical & Data Science Core
+numpy==1.26.4
+pandas==2.2.3
+scikit-learn==1.9.1
+scipy>=1.10.0
+joblib>=1.3.0
+
+# Visualization & Reporting
+matplotlib>=3.8.0
+
+# Supporting Image & Utility Libraries
+scikit-image>=0.20.0
+imgaug>=0.4.0
+beautifulsoup4>=4.12.0
+fire>=0.5.0
+lmdb>=1.4.0
+rapidfuzz>=3.0.0
