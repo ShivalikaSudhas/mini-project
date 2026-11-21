@@ -8,16 +8,24 @@ matching the exact contract required by Phase 5 Multimodal Fusion:
         "texts": List[str],
         "confidences": List[float]
     }
+Also exposes:
+    extract_text(image_input) -> str   (convenience wrapper for the UI)
 """
 
 from __future__ import annotations
 import os
-import json
 import pathlib
+import tempfile
 import traceback
 from typing import Any, Dict, List
+
 import cv2
 import numpy as np
+
+
+# ---------------------------------------------------------------------------
+# Core OCR function (layout + sharpness forensics)
+# ---------------------------------------------------------------------------
 
 def run_ocr(image_path: str) -> Dict[str, List]:
     """
@@ -29,7 +37,6 @@ def run_ocr(image_path: str) -> Dict[str, List]:
         raise FileNotFoundError(f"Image not found: {image_path}")
 
     try:
-        # Load image via OpenCV
         img = cv2.imread(str(img_path))
         if img is None:
             return {"boxes": [], "texts": [], "confidences": []}
@@ -41,7 +48,7 @@ def run_ocr(image_path: str) -> Dict[str, List]:
         thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
         )
-        
+
         # Horizontal structuring element to bind words/lines
         rect_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
         dilated = cv2.dilate(thresh, rect_kernel, iterations=1)
@@ -57,9 +64,9 @@ def run_ocr(image_path: str) -> Dict[str, List]:
             # Filter non-text noise and whole-frame borders
             if 12 < bw < w * 0.95 and 4 < bh < h * 0.5:
                 boxes.append([float(x), float(y), float(x + bw), float(y + bh)])
-                
-                # Compute regional high-frequency sharpness variance (detects digital artifacts / text splicing)
-                roi = gray[y:y+bh, x:x+bw]
+
+                # Regional high-frequency sharpness variance (detects digital artifacts)
+                roi = gray[y:y + bh, x:x + bw]
                 lap_var = float(cv2.Laplacian(roi, cv2.CV_64F).var())
                 conf = float(min(1.0, max(0.35, lap_var / 450.0)))
                 confidences.append(round(conf, 4))
@@ -71,3 +78,32 @@ def run_ocr(image_path: str) -> Dict[str, List]:
         err_file = img_path.with_name(img_path.stem + "_ocr_error.txt")
         err_file.write_text(traceback.format_exc(), encoding="utf-8")
         return {"boxes": [], "texts": [], "confidences": []}
+
+
+# ---------------------------------------------------------------------------
+# Convenience wrapper for the Streamlit UI
+# ---------------------------------------------------------------------------
+
+def extract_text(image_input: Any) -> str:
+    """Accept a file path (str/Path) or a NumPy RGB array.
+    Returns detected text lines concatenated with newlines.
+    """
+    if isinstance(image_input, np.ndarray):
+        fd, tmp_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        # PIL / Streamlit passes RGB; OpenCV expects BGR.
+        if len(image_input.shape) == 3 and image_input.shape[2] == 3:
+            img_bgr = cv2.cvtColor(image_input, cv2.COLOR_RGB2BGR)
+        else:
+            img_bgr = image_input
+        cv2.imwrite(tmp_path, img_bgr)
+        result = run_ocr(tmp_path)
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+    else:
+        result = run_ocr(str(image_input))
+
+    texts = result.get("texts", [])
+    return "\n".join(texts)
