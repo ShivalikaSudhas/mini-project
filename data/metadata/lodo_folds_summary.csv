@@ -1,6 +1,0 @@
-held_out_doc_type,train_samples,val_samples,test_samples (held-out),train_doc_types
-aadhaar,680,120,200,"driving_licence, pan, passport, voter_id"
-driving_licence,680,120,200,"aadhaar, pan, passport, voter_id"
-pan,680,120,200,"aadhaar, driving_licence, passport, voter_id"
-passport,680,120,200,"aadhaar, driving_licence, pan, voter_id"
-voter_id,680,120,200,"aadhaar, driving_licence, pan, passport"

@@ -16,6 +16,17 @@ from PIL import Image
 def generate_prepared_metadata(
     raw_dataset_dir: str = "D:/visual/synthetic_id_dataset/synthetic_id_dataset",
     output_metadata_dir: str = "D:/visual/data/metadata",
+    random_seed: int = 42,
+):
+    raw_root = Path(raw_dataset_dir)
+    if not raw_root.exists():
+        print(f"[WARN] Raw dataset directory '{raw_root}' not found. Skipping metadata generation.")
+        return
+    out_dir = Path(output_metadata_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    raw_dataset_dir: str = "D:/visual/synthetic_id_dataset/synthetic_id_dataset",
+    output_metadata_dir: str = "D:/visual/data/metadata",
     random_seed: int = 42
 ):
     raw_root = Path(raw_dataset_dir)
