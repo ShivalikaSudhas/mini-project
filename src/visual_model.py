@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as T
-import timm
+from torchvision import models
 
 log = logging.getLogger(__name__)
 
@@ -62,12 +62,7 @@ class VisualForensicModel(nn.Module):
         self.feature_dim = feature_dim
 
         # Backbone: timm efficientnet_b0
-        self.backbone = timm.create_model(
-            "efficientnet_b0",
-            pretrained=pretrained,
-            num_classes=0,
-            global_pool="",
-        )
+        self.backbone = models.efficientnet_b0(pretrained=pretrained).features
 
         # Global average pooling
         self.global_pool = nn.AdaptiveAvgPool2d(1)
