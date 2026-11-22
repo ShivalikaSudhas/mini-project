@@ -1,11 +1,13 @@
 """
-tests/test_pipeline.py — End-to-end sanity tests for the screening pipeline.
-Tests both Shivalika's Visual stream and Vidyaaa's OCR stream.
+tests/test_pipeline.py — End-to-end sanity tests for the complete screening pipeline.
+Tests Shivalika's Visual stream, Vidyaaa's OCR stream, and Liza's Multimodal Fusion engine.
 
 Run with:  pytest tests/test_pipeline.py -v
 """
 
+import os
 import sys
+import tempfile
 import pathlib
 
 # Ensure repo root is importable
@@ -40,6 +42,13 @@ def test_import_ocr_module():
         OCR_FEATURE_NAMES,
     )
     assert len(OCR_FEATURE_NAMES) == 11
+
+
+def test_import_fusion_module():
+    from visual_feature_extractor import VisualStreamExtractor, VISUAL_FEATURE_NAMES
+    from verify_new_id import verify_id_multimodal, IDVerificationEngine, MULTIMODAL_FEATURE_NAMES
+    assert len(VISUAL_FEATURE_NAMES) == 16
+    assert len(MULTIMODAL_FEATURE_NAMES) == 27
 
 
 def test_import_explainability():
@@ -91,8 +100,6 @@ def test_extract_visual_features():
 
 def test_extract_ocr_features_dummy():
     from ocr_feature_extractor import extract_ocr_features, OCR_FEATURE_NAMES
-    import tempfile
-    import os
 
     img = _make_dummy_image()
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
@@ -111,8 +118,6 @@ def test_extract_ocr_features_dummy():
 
 def test_predict_ocr_dummy():
     from ocr_feature_extractor import predict_ocr
-    import tempfile
-    import os
 
     img = _make_dummy_image()
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
@@ -124,6 +129,41 @@ def test_predict_ocr_dummy():
             assert key in res
         assert res["prediction"] in ("Genuine", "Forged", "Unknown")
         assert 0.0 <= res["confidence"] <= 1.0
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+
+
+def test_extract_visual_16d_features_dummy():
+    from visual_feature_extractor import VisualStreamExtractor
+
+    img = _make_dummy_image()
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        tmp_name = f.name
+    try:
+        img.save(tmp_name)
+        extractor = VisualStreamExtractor()
+        v_feats = extractor.extract_features(tmp_name)
+        assert v_feats.shape == (16,)
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+
+
+def test_multimodal_fusion_inference_dummy():
+    from verify_new_id import verify_id_multimodal
+
+    img = _make_dummy_image()
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        tmp_name = f.name
+    try:
+        img.save(tmp_name)
+        res = verify_id_multimodal(tmp_name)
+        for key in ("verdict", "confidence_pct", "forged_probability_pct",
+                    "fused_features_27d", "diagnostics"):
+            assert key in res
+        assert res["verdict"] in ("GENUINE", "FORGED")
+        assert res["fused_features_27d"].shape == (27,)
     finally:
         if os.path.exists(tmp_name):
             os.remove(tmp_name)
