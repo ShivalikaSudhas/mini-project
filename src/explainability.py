@@ -52,10 +52,24 @@ class GradCAM:
         self.model.eval()
         self.model.zero_grad()
 
+        # Ensure target layer parameters require gradients so backward hook fires
+        orig_grad_states = []
+        for param in self.target_layer.parameters():
+            orig_grad_states.append(param.requires_grad)
+            param.requires_grad = True
+
         out = self.model(input_tensor)
         logits = out["logits"]
         score = logits[0, target_class]
         score.backward()
+
+        # Restore original requires_grad states
+        for param, state in zip(self.target_layer.parameters(), orig_grad_states):
+            param.requires_grad = state
+
+        if self.gradients is None or self.activations is None:
+            # Fallback for frozen/constant activations
+            return np.zeros((input_tensor.shape[2], input_tensor.shape[3]), dtype=np.float32)
 
         # Global average pool gradients
         pooled_grads = torch.mean(self.gradients, dim=[0, 2, 3])

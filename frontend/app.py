@@ -4,9 +4,8 @@ Interactive Web Application for Mini-Project Presentation & Evaluation.
 Provides:
   - Preset test selection (Aadhaar, PAN, Driving Licence, Passport, Voter ID)
   - Custom drag-and-drop file upload
-  - Visual Forensics (EfficientNet-B0 backbone)
-  - Text & Layout Forensics (OpenCV morphological text isolation & edge-sharpness variance)
-  - Explainable AI (Grad-CAM heatmaps showing forged regions)
+  - Visual Forensics (EfficientNet-B0 backbone + Grad-CAM explainability) [Shivalika]
+  - OCR Stream (PaddleOCR + 11-D Numerical Layout Features + OCR Classifier) [Vidyaaa]
   - Architectural & Evaluation Summary for project judges
 """
 
@@ -18,6 +17,7 @@ from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+import pandas as pd
 import streamlit as st
 from PIL import Image
 
@@ -27,8 +27,8 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from src.visual_model import get_default_visual_model, predict_visual
-from src.ocr_model import run_ocr
 from src.explainability import visualize_gradcam
+from ocr_feature_extractor import run_ocr, extract_ocr_features, predict_ocr, OCR_FEATURE_NAMES
 
 # ── App Styling & Configuration ───────────────────────────────────────────────
 st.set_page_config(
@@ -59,62 +59,77 @@ st.markdown("""
         padding: 16px;
         margin-bottom: 12px;
     }
-    .status-badge-forged {
-        background-color: #FEE2E2;
-        color: #991B1B;
-        font-weight: 700;
-        padding: 8px 16px;
-        border-radius: 6px;
-        font-size: 1.2rem;
-        display: inline-block;
-        border: 1px solid #F87171;
-    }
     .status-badge-genuine {
-        background-color: #DCFCE7;
-        color: #166534;
-        font-weight: 700;
+        background-color: #ECFDF5;
+        color: #065F46;
+        border: 1px solid #A7F3D0;
         padding: 8px 16px;
         border-radius: 6px;
-        font-size: 1.2rem;
-        display: inline-block;
-        border: 1px solid #4ADE80;
+        font-weight: 700;
+        font-size: 1.1rem;
+        text-align: center;
+    }
+    .status-badge-forged {
+        background-color: #FEF2F2;
+        color: #991B1B;
+        border: 1px solid #FECACA;
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-weight: 700;
+        font-size: 1.1rem;
+        text-align: center;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 24px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        font-size: 1rem;
+        font-weight: 600;
     }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Preset Demo Documents ────────────────────────────────────────────────────
+# ── Preset Sample Catalog ─────────────────────────────────────────────────────
 PRESETS = {
-    "PAN Card (Forged)": "demo_samples/pan_forged.jpg",
-    "PAN Card (Genuine)": "demo_samples/pan_genuine.jpg",
-    "Aadhaar (Forged)": "demo_samples/aadhaar_forged.jpg",
     "Aadhaar (Genuine)": "demo_samples/aadhaar_genuine.jpg",
-    "Driving Licence (Forged)": "demo_samples/driving_licence_forged.jpg",
+    "Aadhaar (Forged)": "demo_samples/aadhaar_forged.jpg",
+    "PAN Card (Genuine)": "demo_samples/pan_genuine.jpg",
+    "PAN Card (Forged)": "demo_samples/pan_forged.jpg",
     "Driving Licence (Genuine)": "demo_samples/driving_licence_genuine.jpg",
-    "Passport (Forged)": "demo_samples/passport_forged.jpg",
+    "Driving Licence (Forged)": "demo_samples/driving_licence_forged.jpg",
     "Passport (Genuine)": "demo_samples/passport_genuine.jpg",
-    "Voter ID (Forged)": "demo_samples/voter_id_forged.jpg",
+    "Passport (Forged)": "demo_samples/passport_forged.jpg",
     "Voter ID (Genuine)": "demo_samples/voter_id_genuine.jpg",
+    "Voter ID (Forged)": "demo_samples/voter_id_forged.jpg",
 }
 
 
-# ── Cached Model Loading ─────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="Loading EfficientNet-B0 weights...")
-def load_cached_visual_model(ckpt_path: str):
-    return get_default_visual_model(checkpoint_path=ckpt_path)
+@st.cache_resource(show_spinner=False)
+def load_cached_visual_model(checkpoint_path: str):
+    """Load and cache the trained visual forensic model."""
+    ckpt = pathlib.Path(checkpoint_path)
+    if not ckpt.is_file():
+        st.warning(f"Trained checkpoint not found at: {checkpoint_path}. Using architecture with untrained weights.")
+        return get_default_visual_model()
+    return get_default_visual_model(checkpoint_path=str(ckpt))
 
 
-# ── Helper Utilities ─────────────────────────────────────────────────────────
 def bgr_to_rgb(img_bgr: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
 
-def draw_bounding_boxes(img_rgb: np.ndarray, boxes: list) -> np.ndarray:
-    """Draw bounding boxes around isolated text fields."""
+def draw_bounding_boxes(img_rgb: np.ndarray, boxes: list, texts: list = None) -> np.ndarray:
+    """Draw bounding boxes and detected text around isolated text fields."""
     annotated = img_rgb.copy()
-    for b in boxes:
+    for i, b in enumerate(boxes):
         x1, y1, x2, y2 = map(int, b)
         cv2.rectangle(annotated, (x1, y1), (x2, y2), (16, 185, 129), 2)
+        if texts and i < len(texts) and texts[i] and not texts[i].startswith("field_"):
+            label = texts[i][:15]
+            cv2.putText(annotated, label, (x1, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (16, 185, 129), 1)
     return annotated
 
 
@@ -123,6 +138,7 @@ with st.sidebar:
     st.image("https://img.icons8.com/color/96/id-verified.png", width=64)
     st.title("Screening System")
     st.markdown("**Mini-Project Evaluation Demo**")
+    st.caption("Visual: Shivalika | OCR: Vidyaaa")
     st.markdown("---")
 
     st.subheader("1. Input Document Source")
@@ -149,19 +165,24 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("2. Model Settings")
     default_ckpt = str(repo_root / "models/visual/best_visual_model.pth")
-    ckpt_path = st.text_input("Checkpoint Path", value=default_ckpt)
+    ckpt_path = st.text_input("Visual Checkpoint Path", value=default_ckpt)
 
     show_overlay = st.checkbox("Overlay OCR Text Bounding Boxes", value=True)
 
     st.markdown("---")
-    st.caption("Developed for Mini-Project: AI-Based Multimodal Fake ID Screening")
+    st.caption("AI-Based Multimodal Fake ID Screening")
 
 
 # ── Main Content Area ────────────────────────────────────────────────────────
 st.markdown('<div class="main-header">🛡️ Multimodal Fake Identity & Document Screening System</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Deep Forensic Analysis using EfficientNet-B0 Visual Branch, Morphological Text-Region Analysis & Grad-CAM Explainability</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Dual-Stream Forensics: EfficientNet-B0 Visual Branch + PaddleOCR 11-D Layout Engine & Grad-CAM Explainability</div>', unsafe_allow_html=True)
 
-tab_demo, tab_architecture, tab_eval = st.tabs(["🚀 Live Screening Demo", "📐 System Architecture", "📊 Validation & Anti-Overfitting"])
+tab_demo, tab_ocr, tab_architecture, tab_eval = st.tabs([
+    "🚀 Live Screening Demo",
+    "📝 OCR & 11-D Features",
+    "📐 System Architecture",
+    "📊 Validation & Anti-Overfitting"
+])
 
 with tab_demo:
     if selected_image is None:
@@ -177,9 +198,9 @@ with tab_demo:
         col_img, col_diag = st.columns([1, 1], gap="large")
 
         # Process Visual Model & OCR
-        with st.spinner("Analyzing document visual signatures and layout sharpness..."):
+        with st.spinner("Analyzing document visual signatures and PaddleOCR layout features..."):
             vis_res = predict_visual(selected_image, model=model)
-            ocr_res = run_ocr(str(temp_img_path))
+            ocr_pred = predict_ocr(str(temp_img_path))
             gradcam_bgr = visualize_gradcam(selected_image, model)
 
         # Clean up temp file
@@ -194,9 +215,11 @@ with tab_demo:
             st.subheader(f"📄 Target: {image_name}")
             
             img_np = np.array(selected_image)
-            if show_overlay and len(ocr_res.get("boxes", [])) > 0:
-                display_img = draw_bounding_boxes(img_np, ocr_res["boxes"])
-                caption_text = f"Input document with {len(ocr_res['boxes'])} text regions isolated (Green)"
+            boxes = ocr_pred.get("boxes", [])
+            texts = ocr_pred.get("texts", [])
+            if show_overlay and len(boxes) > 0:
+                display_img = draw_bounding_boxes(img_np, boxes, texts)
+                caption_text = f"Input document with {len(boxes)} text regions isolated ({ocr_pred.get('engine', 'OCR')})"
             else:
                 display_img = img_np
                 caption_text = "Raw Input Document"
@@ -214,85 +237,147 @@ with tab_demo:
 
         # Right Column: Diagnostic & Verification Breakdown
         with col_diag:
-            st.subheader("🔍 Forensic Screening Diagnosis")
+            st.subheader("🔍 Dual-Stream Screening Diagnosis")
 
-            is_forged = vis_res["prediction"].lower() == "forged"
-            pred_text = "FORGED DOCUMENT DETECTED" if is_forged else "GENUINE DOCUMENT VERIFIED"
-            badge_class = "status-badge-forged" if is_forged else "status-badge-genuine"
+            # Stream 1: Visual Forensics
+            st.markdown("#### 1️⃣ Visual Stream (Shivalika — EfficientNet-B0)")
+            is_vis_forged = vis_res["prediction"].lower() == "forged"
+            vis_pred_text = "FORGED DOCUMENT DETECTED" if is_vis_forged else "GENUINE DOCUMENT VERIFIED"
+            vis_badge = "status-badge-forged" if is_vis_forged else "status-badge-genuine"
+            st.markdown(f'<div class="{vis_badge}">{"🚨 " if is_vis_forged else "✅ "}{vis_pred_text}</div>', unsafe_allow_html=True)
+            
+            p_v1, p_v2 = st.columns(2)
+            with p_v1:
+                st.metric("Visual Confidence", f"{vis_res['confidence']*100:.1f}%")
+            with p_v2:
+                st.metric("P(Forged | Visual)", f"{vis_res['probability_forged']*100:.1f}%")
 
-            st.markdown(f'<div class="{badge_class}">{"🚨 " if is_forged else "✅ "}{pred_text}</div>', unsafe_allow_html=True)
             st.write("")
 
-            # Visual Confidence
-            conf = vis_res["confidence"] * 100
-            st.metric("Primary Visual Confidence", f"{conf:.2f}%")
-            st.progress(vis_res["confidence"])
+            # Stream 2: OCR Stream
+            st.markdown(f"#### 2️⃣ OCR & Layout Stream (Vidyaaa — {ocr_pred.get('engine', 'PaddleOCR')})")
+            is_ocr_forged = ocr_pred["prediction"].lower() == "forged"
+            ocr_pred_text = "FORGED LAYOUT / SPLICED TEXT" if is_ocr_forged else "CONSISTENT TEXT & LAYOUT"
+            ocr_badge = "status-badge-forged" if is_ocr_forged else "status-badge-genuine"
+            st.markdown(f'<div class="{ocr_badge}">{"🚨 " if is_ocr_forged else "✅ "}{ocr_pred_text}</div>', unsafe_allow_html=True)
 
-            # Probability Breakdown
-            st.markdown("#### ⚖️ Probability Distribution")
-            p_col1, p_col2 = st.columns(2)
-            with p_col1:
-                st.metric("P(Genuine)", f"{vis_res['probability_genuine']*100:.1f}%")
-            with p_col2:
-                st.metric("P(Forged)", f"{vis_res['probability_forged']*100:.1f}%")
+            p_o1, p_o2 = st.columns(2)
+            with p_o1:
+                st.metric("OCR Stream Confidence", f"{ocr_pred['confidence']*100:.1f}%")
+            with p_o2:
+                st.metric("P(Forged | OCR)", f"{ocr_pred['probability_forged']*100:.1f}%")
 
-            # OCR Forensic Metrics
-            st.markdown("#### 📝 Layout & Edge-Sharpness Analysis")
-            boxes = ocr_res.get("boxes", [])
-            confs = ocr_res.get("confidences", [])
-            mean_sharpness = float(np.mean(confs)) if len(confs) > 0 else 0.0
+            st.markdown("---")
 
-            m_col1, m_col2 = st.columns(2)
+            # OCR Summary Metrics
+            st.markdown("#### 📝 Extracted Layout Diagnostics")
+            feats = ocr_pred.get("features", {})
+            m_col1, m_col2, m_col3 = st.columns(3)
             with m_col1:
-                st.metric("Isolated Text Regions", f"{len(boxes)} fields")
+                st.metric("Text Boxes", f"{int(feats.get('num_text_boxes', 0))}")
             with m_col2:
-                st.metric("Mean Text Edge Sharpness", f"{mean_sharpness:.3f}")
-
-            st.caption("Edge sharpness variance detects digital copy-pasting, spliced font textures, and JPEG compression disparities.")
+                st.metric("Mean Conf", f"{feats.get('mean_confidence', 0.0):.3f}")
+            with m_col3:
+                st.metric("Low Conf Ratio", f"{feats.get('low_conf_ratio', 0.0)*100:.1f}%")
 
             # Downloadable Verification Report
             st.markdown("#### 💾 Export Audit Report")
             audit_report = {
                 "document_name": image_name,
-                "final_prediction": vis_res["prediction"].upper(),
-                "confidence_score": round(vis_res["confidence"], 4),
-                "probability_distribution": {
-                    "genuine": vis_res["probability_genuine"],
-                    "forged": vis_res["probability_forged"]
+                "visual_stream": {
+                    "prediction": vis_res["prediction"].upper(),
+                    "confidence": round(vis_res["confidence"], 4),
+                    "probability_genuine": round(vis_res["probability_genuine"], 4),
+                    "probability_forged": round(vis_res["probability_forged"], 4),
+                    "lead": "Shivalika"
                 },
-                "layout_analysis": {
-                    "text_regions_detected": len(boxes),
-                    "mean_edge_sharpness": round(mean_sharpness, 4)
+                "ocr_stream": {
+                    "prediction": ocr_pred["prediction"].upper(),
+                    "confidence": round(ocr_pred["confidence"], 4),
+                    "probability_genuine": round(ocr_pred["probability_genuine"], 4),
+                    "probability_forged": round(ocr_pred["probability_forged"], 4),
+                    "engine": ocr_pred.get("engine", "PaddleOCR"),
+                    "features": feats,
+                    "lead": "Vidyaaa"
                 },
-                "backbone_architecture": "EfficientNet-B0 (1280-dim embedding)",
+                "backbone_architectures": {
+                    "visual": "EfficientNet-B0 (1280-dim embedding)",
+                    "ocr": "PaddleOCR + 11-D Numerical Layout MLP (32-16 units)"
+                },
                 "screening_status": "COMPLETED"
             }
 
             st.download_button(
-                label="📥 Download Formal Audit Report (JSON)",
+                label="📥 Download Formal Dual-Stream Audit Report (JSON)",
                 data=json.dumps(audit_report, indent=2),
                 file_name=f"audit_report_{image_name.replace(' ', '_').lower()}.json",
                 mime="application/json"
             )
 
+with tab_ocr:
+    st.subheader("Vidyaaa's OCR Stream: PaddleOCR & 11-D Layout Feature Profiling")
+    st.markdown("""
+    The OCR stream analyzes identity documents using **PaddleOCR** text recognition coupled with **11-dimensional geometric and confidence profiling**.
+    This captures typographic inconsistencies, abnormal font aspect ratios, character density anomalies, and text splicing.
+    """)
+
+    if selected_image is not None and 'ocr_pred' in locals():
+        st.markdown("### 📊 Extracted 11-D Feature Vector for Current Document")
+        feats_data = []
+        descriptions = {
+            "mean_confidence": "Average OCR confidence across all detected text fields",
+            "min_confidence": "Lowest confidence score observed in a single text region",
+            "max_confidence": "Highest confidence score observed across document",
+            "std_confidence": "Variance of confidence scores (high std = mixed genuine/tampered fields)",
+            "low_conf_count": "Count of text boxes with recognition confidence < 0.85",
+            "low_conf_ratio": "Fraction of low-confidence text regions",
+            "num_text_boxes": "Total number of isolated text regions",
+            "text_area_ratio": "Ratio of text surface area to total card surface area",
+            "mean_aspect_ratio": "Average width-to-height ratio of text boxes (detects stretched text)",
+            "box_height_std": "Standard deviation of text box heights (font size inconsistency)",
+            "mean_char_density": "Character count per pixel of text box area"
+        }
+        for k in OCR_FEATURE_NAMES:
+            val = ocr_pred.get("features", {}).get(k, 0.0)
+            feats_data.append({
+                "Feature Name": k,
+                "Extracted Value": val,
+                "Forensic Significance": descriptions.get(k, "")
+            })
+        df_feats = pd.DataFrame(feats_data)
+        st.dataframe(df_feats, use_container_width=True)
+
+        st.markdown("### 📝 Extracted Text Fields & Confidences")
+        texts_list = ocr_pred.get("texts", [])
+        if texts_list:
+            df_texts = pd.DataFrame({
+                "Index": list(range(1, len(texts_list) + 1)),
+                "Extracted Field Text": texts_list
+            })
+            st.dataframe(df_texts, use_container_width=True)
+        else:
+            st.info("No text fields isolated.")
+    else:
+        st.info("Select or upload a document in the sidebar to view its extracted 11-D OCR features.")
+
 with tab_architecture:
     st.subheader("System Architecture & Multimodal Pipeline")
     st.markdown("""
-    The system uses a **two-stream multimodal forensic pipeline** designed to overcome single-modality forgery vulnerabilities:
+    The screening framework employs a **collaborative dual-stream multimodal architecture**:
 
-    1. **Visual Stream (Deep Convolutional Forensics)**:
+    1. **Visual Stream (Deep Convolutional Forensics — Shivalika)**:
        - **Backbone**: `EfficientNet-B0` pretrained on ImageNet and fine-tuned on identity document forensics.
        - **Feature Extraction**: Extracts a 1280-dimensional penultimate embedding capturing high-frequency noise, resampling artifacts, edge discontinuities, and color space inconsistencies.
        - **Classification Head**: Dropout (p=0.3) followed by a linear classification layer with calibrated Softmax probabilities.
+       - **Explainability**: Grad-CAM saliency heatmaps highlighting exact pixel regions indicative of forgery.
 
-    2. **Text & Layout Stream (Forensic Document Analysis)**:
-       - **Stroke Isolation**: Adaptive Gaussian thresholding isolates text strokes independently of illumination gradients.
-       - **Morphological Structuring**: Rectangular dilation kernels link individual characters into cohesive field regions.
-       - **Forensic Splicing Detection**: Computes regional Laplacian edge-gradient sharpness variance across text boundaries to detect digitally spliced text and resolution mismatches.
+    2. **OCR & Layout Stream (PaddleOCR Forensics — Vidyaaa)**:
+       - **Text Extraction**: Multilingual text isolation with PaddleOCR.
+       - **11-D Statistical & Layout Profiling**: Computes 6 confidence metrics and 5 spatial layout/density metrics.
+       - **MLP Classifier**: 2-layer Neural Network (32-16 hidden units) trained strictly on layout metrics to detect tampering independently of visual pixels.
 
-    3. **Explainability Branch (Grad-CAM)**:
-       - Computes gradient activation maps at the final convolutional layer (`conv_head`).
-       - Localizes the exact geometric areas (e.g., altered photographs, counterfeit seals, or overwritten text fields) driving the model's determination.
+    3. **Multi-Disciplinary Synthesis**:
+       - Both streams provide complementary perspectives: visual stream identifies pixel-level texture tampering; OCR stream identifies semantic and typographical anomalies.
     """)
 
 with tab_eval:
