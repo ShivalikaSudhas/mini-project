@@ -19,12 +19,19 @@ models/**/*.pth
 
 # Datasets & ZIPs
 *.zip
+*.tar
 *.tar.gz
 data/raw/
 synthetic_id_dataset/
 synthetic_id_dataset.zip
+indian_multilingual_id_dataset_ALL/
+indian_multilingual_id_dataset_ALL*/
 
-# IDE & OS
+# Local cache & downloads
+.paddleocr/
+outputs/
+output/
+result/
 .vscode/
 .idea/
 .DS_Store

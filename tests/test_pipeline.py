@@ -1,5 +1,6 @@
 """
 tests/test_pipeline.py — End-to-end sanity tests for the screening pipeline.
+Tests both Shivalika's Visual stream and Vidyaaa's OCR stream.
 
 Run with:  pytest tests/test_pipeline.py -v
 """
@@ -29,8 +30,17 @@ def test_import_visual_model():
         _preprocess_input_image,
     )
 
-def test_import_ocr_model():
-    from src.ocr_model import run_ocr, extract_text
+
+def test_import_ocr_module():
+    from ocr_feature_extractor import (
+        run_ocr,
+        extract_text,
+        extract_ocr_features,
+        predict_ocr,
+        OCR_FEATURE_NAMES,
+    )
+    assert len(OCR_FEATURE_NAMES) == 11
+
 
 def test_import_explainability():
     from src.explainability import visualize_gradcam, generate_and_save_gradcam
@@ -63,7 +73,6 @@ def test_predict_visual():
     from src.visual_model import predict_visual
     img = _make_dummy_image()
     result = predict_visual(img)
-    # Check all expected keys
     for key in ("prediction", "class_id", "probability_genuine",
                 "probability_forged", "confidence", "features"):
         assert key in result, f"Missing key: {key}"
@@ -77,12 +86,51 @@ def test_extract_visual_features():
     img = _make_dummy_image()
     feats = extract_visual_features(img)
     assert feats.shape == (1280,)
-    # Should be L2-normalised → norm ≈ 1
     assert abs(np.linalg.norm(feats) - 1.0) < 0.01
 
 
+def test_extract_ocr_features_dummy():
+    from ocr_feature_extractor import extract_ocr_features, OCR_FEATURE_NAMES
+    import tempfile
+    import os
+
+    img = _make_dummy_image()
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        tmp_name = f.name
+    try:
+        img.save(tmp_name)
+        vec, fdict = extract_ocr_features(tmp_name)
+        assert vec.shape == (11,)
+        assert len(fdict) == 11
+        for name in OCR_FEATURE_NAMES:
+            assert name in fdict
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+
+
+def test_predict_ocr_dummy():
+    from ocr_feature_extractor import predict_ocr
+    import tempfile
+    import os
+
+    img = _make_dummy_image()
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+        tmp_name = f.name
+    try:
+        img.save(tmp_name)
+        res = predict_ocr(tmp_name)
+        for key in ("prediction", "confidence", "probability_genuine", "probability_forged", "features"):
+            assert key in res
+        assert res["prediction"] in ("Genuine", "Forged", "Unknown")
+        assert 0.0 <= res["confidence"] <= 1.0
+    finally:
+        if os.path.exists(tmp_name):
+            os.remove(tmp_name)
+
+
 def test_extract_text_numpy():
-    from src.ocr_model import extract_text
+    from ocr_feature_extractor import extract_text
     arr = np.array(_make_dummy_image())
     text = extract_text(arr)
     assert isinstance(text, str)
@@ -95,7 +143,6 @@ def test_visualize_gradcam():
     model = get_default_visual_model()
     cam = visualize_gradcam(img, model)
     assert isinstance(cam, np.ndarray)
-    # Same spatial dimensions as input
     assert cam.shape[:2] == (200, 320)
 
 
@@ -108,7 +155,7 @@ def test_frontend_syntax():
     app_path = repo_root / "frontend" / "app.py"
     assert app_path.exists(), f"frontend/app.py not found at {app_path}"
     source = app_path.read_text(encoding="utf-8")
-    compile(source, str(app_path), "exec")  # raises SyntaxError on bad code
+    compile(source, str(app_path), "exec")
 
 
 if __name__ == "__main__":
