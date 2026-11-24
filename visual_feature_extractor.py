@@ -22,51 +22,40 @@ VISUAL_FEATURE_NAMES = [
 ]
 
 class VisualStreamExtractor:
-    def __init__(self):
-        self.use_torch = False
-        self.use_paddle = False
-        self.backbone = None
+    def __init__(self, visual_checkpoint_path="models/visual/best_visual_model.pth"):
+        self.use_efficientnet = False
+        self.efficientnet_model = None
 
         try:
-            import torch
-            import torchvision.models as tv_models
-            self.backbone = tv_models.mobilenet_v3_small(weights=None)
-            self.backbone.eval()
-            self.use_torch = True
+            from src.visual_model import get_default_visual_model
+            self.efficientnet_model = get_default_visual_model(visual_checkpoint_path)
+            self.use_efficientnet = True
         except Exception:
-            try:
-                import paddle
-                import paddle.vision.models as pd_models
-                self.backbone = pd_models.mobilenet_v3_small(pretrained=False)
-                self.backbone.eval()
-                self.use_paddle = True
-            except Exception:
-                self.backbone = None
+            self.efficientnet_model = None
 
     def extract_deep_cnn_features(self, img_bgr):
-        """Extracts 8 compressed deep spatial latent features."""
+        """Extracts 8 compressed deep spatial latent features using Shivalika's EfficientNet-B0."""
         rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
         resized = cv2.resize(rgb, (224, 224))
+
+        if self.use_efficientnet and self.efficientnet_model is not None:
+            try:
+                import torch
+                from PIL import Image
+                from src.visual_model import _preprocess_input_image
+                pil_img = Image.fromarray(rgb)
+                tensor_in = _preprocess_input_image(pil_img)
+                with torch.no_grad():
+                    out = self.efficientnet_model(tensor_in)
+                    feats = out["features"].squeeze(0).cpu().numpy()
+                return np.mean(feats.reshape(8, -1), axis=1).astype(np.float32)
+            except Exception:
+                pass
+
+        # Robust spatial frequency descriptor fallback
         normalized = (resized / 255.0 - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]
-
-        if self.use_torch and self.backbone is not None:
-            import torch
-            tensor_in = torch.tensor(normalized.transpose(2, 0, 1), dtype=torch.float32).unsqueeze(0)
-            with torch.no_grad():
-                preds = self.backbone(tensor_in).detach().cpu().numpy().flatten()
-            return np.mean(preds.reshape(8, -1), axis=1).astype(np.float32)
-
-        elif self.use_paddle and self.backbone is not None:
-            import paddle
-            tensor_in = paddle.to_tensor(normalized.transpose(2, 0, 1), dtype='float32').unsqueeze(0)
-            with paddle.no_grad():
-                preds = self.backbone(tensor_in).numpy().flatten()
-            return np.mean(preds.reshape(8, -1), axis=1).astype(np.float32)
-
-        else:
-            # Fallback latent statistical descriptor
-            h_splits = np.array_split(resized, 8, axis=0)
-            return np.array([float(np.mean(s)) for s in h_splits], dtype=np.float32)
+        h_splits = np.array_split(normalized, 8, axis=0)
+        return np.array([float(np.mean(s)) for s in h_splits], dtype=np.float32)
 
     def extract_forensic_texture_features(self, img_bgr):
         """Extracts 8 forensic visual features (edge sharpness, frequency, ELA)."""

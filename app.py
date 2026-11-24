@@ -25,7 +25,7 @@ PRESETS = {
 def analyze_image(img_path_str: str):
     p = Path(img_path_str.strip().strip('"').strip("'"))
     if not p.is_file():
-        print(f"\n❌ Error: File not found -> {p}\n")
+        print(f"\n Error: File not found -> {p}\n")
         return
 
     print(f"\n🔍 Analyzing: {p.name}")

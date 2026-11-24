@@ -56,37 +56,52 @@ class VisualForensicModel(nn.Module):
         freeze_backbone: bool = True,
         dropout_rate: float = 0.3,
         feature_dim: int = FEATURE_DIM,
+        use_mlp_head: bool = False,
     ):
         super().__init__()
         self.num_classes = num_classes
         self.feature_dim = feature_dim
+        self.use_mlp_head = use_mlp_head
 
         # Backbone: timm efficientnet_b0
         self.backbone = timm.create_model(
             "efficientnet_b0",
             pretrained=pretrained,
             num_classes=0,
-            global_pool="",
+            global_pool="" if not use_mlp_head else "avg",
         )
 
         # Global average pooling
         self.global_pool = nn.AdaptiveAvgPool2d(1)
 
         # Classification head
-        self.classifier = nn.Sequential(
-            nn.Dropout(p=dropout_rate),
-            nn.Linear(feature_dim, num_classes),
-        )
+        if use_mlp_head:
+            self.classifier = nn.Sequential(
+                nn.Dropout(p=dropout_rate),
+                nn.Linear(feature_dim, 256),
+                nn.BatchNorm1d(256),
+                nn.ReLU(),
+                nn.Dropout(p=0.2),
+                nn.Linear(256, num_classes),
+            )
+        else:
+            self.classifier = nn.Sequential(
+                nn.Dropout(p=dropout_rate),
+                nn.Linear(feature_dim, num_classes),
+            )
 
         if freeze_backbone:
             self._freeze_backbone()
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        feat_map = self.backbone(x)         # (B, 1280, H, W)
-        pooled = self.global_pool(feat_map) # (B, 1280, 1, 1)
-        features = pooled.flatten(1)        # (B, 1280)
-        logits = self.classifier(features)  # (B, 2)
-        proba  = F.softmax(logits, dim=-1)  # (B, 2)
+        feat_map = self.backbone(x)
+        if len(feat_map.shape) == 4:
+            pooled = self.global_pool(feat_map)
+            features = pooled.flatten(1)
+        else:
+            features = feat_map
+        logits = self.classifier(features)
+        proba  = F.softmax(logits, dim=-1)
 
         return {
             "logits":   logits,
@@ -152,13 +167,21 @@ class VisualForensicModel(nn.Module):
     def load_checkpoint(cls, path: str, device: Optional[str] = None) -> Tuple["VisualForensicModel", Dict]:
         device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         ckpt = torch.load(path, map_location=device)
-        cfg = ckpt.get("model_config", {})
+        if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+            state_dict = ckpt["model_state_dict"]
+            cfg = ckpt.get("model_config", {})
+        else:
+            state_dict = ckpt
+            cfg = {}
+
+        has_mlp_head = "classifier.5.weight" in state_dict or any("classifier.5" in k for k in state_dict)
         model = cls(
             num_classes=cfg.get("num_classes", 2),
             pretrained=False,
             freeze_backbone=False,
+            use_mlp_head=has_mlp_head,
         )
-        model.load_state_dict(ckpt["model_state_dict"])
+        model.load_state_dict(state_dict)
         model.to(device)
         model.eval()
         return model, ckpt
