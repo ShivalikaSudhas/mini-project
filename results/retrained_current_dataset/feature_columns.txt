@@ -1,0 +1,30 @@
+CV columns:
+cnn_feat_1
+cnn_feat_2
+cnn_feat_3
+cnn_feat_4
+cnn_feat_5
+cnn_feat_6
+cnn_feat_7
+cnn_feat_8
+laplacian_var
+laplacian_mean
+gradient_mean
+gradient_std
+high_freq_ratio
+ela_mean
+ela_std
+color_std_ratio
+
+OCR columns:
+mean_confidence
+min_confidence
+max_confidence
+std_confidence
+low_conf_count
+low_conf_ratio
+num_text_boxes
+text_area_ratio
+mean_aspect_ratio
+box_height_std
+mean_char_density
