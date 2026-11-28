@@ -508,11 +508,12 @@ st.markdown(
 
 
 # ── Editorial Navigation Bar ──────────────────────────────────────────────────
-tab_demo, tab_features, tab_architecture, tab_lodto = st.tabs([
+tab_demo, tab_features, tab_architecture, tab_lodto, tab_dashboard = st.tabs([
     "Live Screening Narrative",
     "27-D Feature Synthesis",
     "Architecture & Teammates",
-    "LODTO Generalization Study"
+    "LODTO Generalization Study",
+    "Training Results Dashboard"
 ])
 
 
@@ -903,21 +904,15 @@ with tab_lodto:
         unsafe_allow_html=True
     )
 
-    rep_dir = repo_root / "reports"
-    img_gap = rep_dir / "lodto_generalization_gap.png"
-    img_folds = rep_dir / "lodto_fold_breakdown.png"
-    img_roc = rep_dir / "roc_curves_comparison.png"
+    rep_dir = repo_root / "results" / "retrained_current_dataset" / "graphs"
+    img_gap = rep_dir / "lodto_unseen_accuracy.png"
+    img_folds = rep_dir / "lodto_unseen_f1.png"
+    img_roc = None
 
-    col_l1, col_l2 = st.columns(2, gap="large")
-    with col_l1:
-        if img_gap.is_file():
-            st.image(str(img_gap), caption="Figure 1: Generalization Gap across Seen vs. Unseen Templates", use_container_width=True)
-    with col_l2:
-        if img_roc.is_file():
-            st.image(str(img_roc), caption="Figure 2: Receiver Operating Characteristic (ROC) Comparison", use_container_width=True)
-
+    if img_gap.is_file():
+        st.image(str(img_gap), caption="Figure 1: LODTO unseen accuracy by held-out document type", use_container_width=True)
     if img_folds.is_file():
-        st.image(str(img_folds), caption="Figure 3: Fold-by-Fold Performance Breakdown Across Indian Document Categories", use_container_width=True)
+        st.image(str(img_folds), caption="Figure 2: Unseen F1 across held-out document categories", use_container_width=True)
 
     lodto_csv = repo_root / "lodto_experiment_results.csv"
     if lodto_csv.is_file():
@@ -925,3 +920,45 @@ with tab_lodto:
         st.markdown('<div class="doc-hero-title" style="font-size: 1.3rem;">Empirical Benchmark Data</div>', unsafe_allow_html=True)
         df_lodto = pd.read_csv(lodto_csv)
         st.dataframe(df_lodto, use_container_width=True, hide_index=True)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 5: RE-TRAINED MODEL RESULTS DASHBOARD
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_dashboard:
+    st.markdown('<div class="editorial-kicker">Reproducible Model Evaluation</div>', unsafe_allow_html=True)
+    st.markdown('<div class="editorial-headline" style="font-size: 2.2rem;">Training Results & Model Statistics</div>', unsafe_allow_html=True)
+    metrics_path = repo_root / "results" / "retrained_current_dataset" / "evaluation_metrics.json"
+    comparison_path = repo_root / "results" / "retrained_current_dataset" / "model_comparison.csv"
+    graph_dir = repo_root / "results" / "retrained_current_dataset" / "graphs"
+    if metrics_path.is_file():
+        with open(metrics_path, "r", encoding="utf-8") as f:
+            training_info = json.load(f)
+        split_info = training_info["split"]
+        st.caption("Classifier retraining on the repository's 2,040-row, precomputed 27-D feature table. The EfficientNet feature extractor was not retrained in this run.")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total samples", f'{training_info["total_samples"]:,}')
+        c2.metric("Training samples", f'{split_info["train_samples"]:,}')
+        c3.metric("Test samples", f'{split_info["test_samples"]:,}')
+        c4.metric("Feature dimensions", "16 + 11 = 27")
+        st.markdown("### Group-isolated holdout split")
+        st.write(f'Train: {split_info["train_genuine"]} genuine + {split_info["train_forged"]} forged. Test: {split_info["test_genuine"]} genuine + {split_info["test_forged"]} forged.')
+        st.write(f'Grouping key: `{split_info["group_key"]}`. Train/test group overlap: **{split_info["group_overlap"]}**.')
+        if comparison_path.is_file():
+            cmp = pd.read_csv(comparison_path)
+            st.markdown("### Comparative model performance")
+            st.dataframe(cmp.style.format({c:"{:.2%}" for c in ["accuracy","precision","recall","f1","balanced_accuracy","roc_auc"]}), use_container_width=True, hide_index=True)
+        g1 = graph_dir / "accuracy_comparison.png"
+        g2 = graph_dir / "confusion_matrices.png"
+        g3 = graph_dir / "fusion_flowchart.png"
+        if g1.is_file():
+            st.image(str(g1), caption="Figure: Accuracy comparison on the group-isolated test set", use_container_width=True)
+        if g2.is_file():
+            st.image(str(g2), caption="Figure: Confusion matrices — genuine (0), forged (1)", use_container_width=True)
+        if g3.is_file():
+            st.image(str(g3), caption="Figure: Multimodal fusion training flow", use_container_width=True)
+        st.markdown("### Interpretation")
+        st.write("The multimodal model combines 16 visual and 11 OCR features. Its test metrics are measured on held-out filename groups, preventing matching genuine/forged filename pairs from crossing the train/test boundary.")
+        st.warning("LODTO measures a harder question: performance on an entirely unseen document type. Refer to the LODTO tab for those results; do not interpret the random/group holdout accuracy as cross-document generalization.")
+    else:
+        st.info("Training results are not present yet. Run the documented training refresh script to populate this dashboard.")
